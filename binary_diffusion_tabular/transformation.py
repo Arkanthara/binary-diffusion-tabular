@@ -279,7 +279,7 @@ class FixedSizeBinaryTableTransformation:
         elif isinstance(y, torch.Tensor):
             y = y.detach().cpu().numpy()
 
-        y_trans = self.label_encoder.fit_transform(y.reshape(-1, 1))
+        y_trans = self.label_encoder.fit_transform(y.ravel())
         y_trans = torch.tensor(y_trans, dtype=torch.float)
 
         self.fitted_label = True
@@ -303,7 +303,7 @@ class FixedSizeBinaryTableTransformation:
         elif isinstance(y, torch.Tensor):
             y = y.detach().cpu().numpy()
 
-        y_trans = self.label_encoder.transform(y.reshape(-1, 1))
+        y_trans = self.label_encoder.transform(y.ravel())
         y_trans = torch.tensor(y_trans, dtype=torch.float)
         return y_trans
 
@@ -358,7 +358,7 @@ class FixedSizeBinaryTableTransformation:
         if self.task == "classification":
             y = y.astype(int)
 
-        y_trans = self.label_encoder.inverse_transform(y.reshape(-1, 1))
+        y_trans = self.label_encoder.inverse_transform(y.ravel())
         return y_trans
 
     def _convert_fixed_size_binary_tensor_to_df(

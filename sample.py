@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 from functools import partial
 
@@ -136,8 +137,18 @@ if __name__ == "__main__":
 
     transformation = FixedSizeBinaryTableTransformation.from_checkpoint(cli_args.ckpt_transformation)
 
+    print(ckpt.keys())
+
     if cli_args.use_ema:
-        diffusion.load_ema(ckpt["diffusion_ema"])
+        ema_state = ckpt["diffusion_ema"]
+
+        ema_model_state = {
+            k.replace("ema_model.", ""): v
+            for k, v in ema_state.items()
+            if k.startswith("ema_model.")
+        }
+
+        diffusion.load_state_dict(ema_model_state)
     else:
         diffusion.load_state_dict(ckpt["diffusion"])
 
@@ -196,5 +207,12 @@ if __name__ == "__main__":
         dfs.append(x_df)
 
     df = pd.concat(dfs)
-    df.to_csv(path_out / "samples.csv", index=False)
+    # Check if path is a dir or a .csv file
+    i = 1
+    while True:
+        if os.path.exists(os.path.join(path_out, f"samples_{i}.csv")):
+            i += 1
+        else:
+            df.to_csv(os.path.join(path_out, f"samples_{i}.csv"), index=False)
+            break
     pbar.close()

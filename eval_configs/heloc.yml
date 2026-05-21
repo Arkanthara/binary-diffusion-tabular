@@ -1,0 +1,30 @@
+data:
+  synthetic_train_paths:
+    - ./data/synthetic/heloc_synth_1.csv
+    - ./data/synthetic/heloc_synth_2.csv
+    - ./data/synthetic/heloc_synth_3.csv
+    - ./data/synthetic/heloc_synth_4.csv
+    - ./data/synthetic/heloc_synth_5.csv
+  test_path: ./data/heloc_test.csv
+  numerical_columns: []    # TODO: fill from generation config
+  categorical_columns: []  # TODO: fill from generation config
+  columns_to_drop: []
+  dropna: true
+  target_column: target    # TODO: set correct target column name
+  task: classification
+models:
+  LR:
+    enabled: true
+    params:
+      max_iter: 500
+  DT:
+    enabled: true
+    params:
+      max_depth: 6
+  RF:
+    enabled: true
+    params:
+      max_depth: 12
+      n_estimators: 78
+      n_jobs: -1
+n_jobs: -1
