@@ -6,20 +6,36 @@ Protocol (from paper):
   - Each set is used to train LR, DT, RF; evaluated on the real test set.
   - Report mean ± std of accuracy (classification) or MSE (regression).
 
-Usage:
+CLI usage:
     python evaluate.py --config config.yaml
+
+Notebook usage:
+    from evaluate import evaluate
+    import yaml
+
+    cfg     = yaml.safe_load(open("eval_configs/diabetes.yml"))
+    results = evaluate(cfg)
+    # results = {
+    #   "dataset": "diabetes",
+    #   "task": "classification",
+    #   "metric": "accuracy",
+    #   "models": {
+    #     "LR": {"mean": 0.82, "std": 0.01, "scores": [...]},
+    #     "DT": {...},
+    #     "RF": {...},
+    #   }
+    # }
 """
 
-import argparse, yaml
-from typing import Optional
-from importlib import metadata
+import argparse
+import yaml
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.tree         import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.ensemble     import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics      import accuracy_score, mean_squared_error
+from sklearn.linear_model  import LogisticRegression, LinearRegression
+from sklearn.tree          import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.ensemble      import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics       import accuracy_score, mean_squared_error
 
 
 # Hyperparameters per dataset (paper, Table 2).
@@ -34,23 +50,29 @@ HYPERPARAMS = {
 }
 
 
-def load(path: str):
-    """Load CSV, replace '?' with NaN, drop unwanted columns."""
-    df = pd.read_csv(path, na_values=["?"])
-    return df
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
 
+def load(path: str) -> pd.DataFrame:
+    """Load CSV, replace '?' with NaN."""
+    return pd.read_csv(path, na_values=["?"])
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing / binarisation
+# ---------------------------------------------------------------------------
 
 def preprocess(df: pd.DataFrame, cfg: dict, target: str, metadata: dict):
     """
     Fill NaN, binarize features, return (X_binary, y, metadata).
 
     The `metadata` dict is populated on the first call (synthetic training set)
-    and reused as-is on subsequent calls (test set), ensuring that:
+    and reused as-is on subsequent calls (test set), ensuring:
       - numerical columns use the same [min, max] range for bit-encoding
       - categorical columns use the same category→index mapping and bit width
     This guarantees every row in both datasets has exactly the same binary length.
     """
-
     col_drop        = cfg["data"].get("columns_to_drop")    or []
     col_categorical = cfg["data"].get("categorical_columns") or []
     col_numerical   = cfg["data"].get("numerical_columns")   or []
@@ -80,89 +102,71 @@ def preprocess(df: pd.DataFrame, cfg: dict, target: str, metadata: dict):
     X = df.drop(columns=[target]).copy()
     y = df[target]
 
-    # ------------------------------------------------------------------
-    # Numerical columns → 32-bit binary string
-    # Min/max are recorded from the first (synthetic) call and reused for
-    # the test set so the encoding range is always identical.
-    # Values are clamped to [0, 1] before encoding to handle out-of-range
-    # test values without producing negative integers or overflow.
-    # ------------------------------------------------------------------
+    # --- numerical → 32-bit binary string --------------------------------
     def numerical_to_binary(val: float, min_val: float, max_val: float) -> str:
         size = 32
-        if max_val == min_val:          # constant column — all zeros
+        if max_val == min_val:
             return "0" * size
         normalized = (val - min_val) / (max_val - min_val)
-        normalized = max(0.0, min(1.0, normalized))   # clamp → no '-' prefix
+        normalized = max(0.0, min(1.0, normalized))
         return format(int(normalized * (2 ** size - 1)), f"0{size}b")
 
     for col in col_numerical:
         if col not in metadata:
-            metadata[col] = {
-                "min": float(X[col].min()),
-                "max": float(X[col].max()),
-            }
-        min_val = metadata[col]["min"]
-        max_val = metadata[col]["max"]
-        # .astype(object) strips the category dtype before applying
+            metadata[col] = {"min": float(X[col].min()), "max": float(X[col].max())}
+        min_val, max_val = metadata[col]["min"], metadata[col]["max"]
         X[col] = (
             X[col]
             .astype(object)
             .apply(lambda x: numerical_to_binary(x, min_val, max_val))
         )
 
-    # ------------------------------------------------------------------
-    # Categorical columns → fixed-width binary string
-    # The category map and bit width come from the first (synthetic) call.
-    # Unknown test categories are mapped to index 0 (a safe default).
-    # ------------------------------------------------------------------
+    # --- categorical → fixed-width binary string -------------------------
     for col in col_categorical:
         if col not in metadata:
             metadata[col] = {
-                "category_map": {
-                    cat: idx for idx, cat in enumerate(X[col].unique())
-                }
+                "category_map": {cat: idx for idx, cat in enumerate(X[col].unique())}
             }
         category_map  = metadata[col]["category_map"]
         unique_values = len(category_map)
         size = int(np.ceil(np.log2(unique_values))) if unique_values > 1 else 1
-        # .astype(object) strips the category dtype so .apply behaves predictably
         X[col] = (
             X[col]
             .astype(object)
             .apply(lambda x: format(category_map.get(x, 0), f"0{size}b"))
         )
 
-    # ------------------------------------------------------------------
-    # Join all binary strings per row → 1-D int array
-    # All columns are now plain Python strings, so "".join is safe.
-    # ------------------------------------------------------------------
-    X_str = X.astype(str)   # uniform object→str, no category weirdness
-
+    # --- join all binary strings per row → 1-D int8 array ---------------
+    X_str = X.astype(str)
     rows_binary = []
     for i in range(len(X_str)):
         row_str = "".join(X_str.iloc[i].values)
         if any(c not in ("0", "1") for c in row_str):
             raise ValueError(
-                f"Row {i} contains non-binary characters: "
-                f"{set(row_str) - {'0','1'}}. "
-                "Likely a NaN was not filled — check your config."
+                f"Row {i} contains non-binary characters "
+                f"{set(row_str) - {'0', '1'}}. "
+                "A NaN was not filled — check your config."
             )
-        rows_binary.append(np.frombuffer(row_str.encode(), dtype=np.uint8) - ord("0"))
+        rows_binary.append(
+            np.frombuffer(row_str.encode(), dtype=np.uint8) - ord("0")
+        )
 
     lengths = {len(r) for r in rows_binary}
     if len(lengths) > 1:
         raise ValueError(
             f"Rows have inconsistent binary lengths {lengths}. "
-            "This means different rows produced different total bit counts — "
-            "check for unseen categories or NaN leakage."
+            "Check for unseen categories or NaN leakage."
         )
 
-    X_binary = np.stack(rows_binary).astype(np.int8)
-    return X_binary, y, metadata
+    return np.stack(rows_binary).astype(np.int8), y, metadata
 
 
-def build_models(task: str, hp: dict, seed: int = 0):
-    """Return LR, DT, RF with dataset-specific hyperparameters."""
+# ---------------------------------------------------------------------------
+# Model factory
+# ---------------------------------------------------------------------------
+
+def build_models(task: str, hp: dict, seed: int = 0) -> dict:
+    """Return {'LR': ..., 'DT': ..., 'RF': ...} for the given task."""
     if task == "classification":
         return {
             "LR": LogisticRegression(max_iter=hp["lr_max_iter"], n_jobs=-1, random_state=seed),
@@ -185,76 +189,136 @@ def build_models(task: str, hp: dict, seed: int = 0):
         }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    cfg      = yaml.safe_load(open(parser.parse_args().config))
-    data_cfg = cfg["data"]
-    dataset  = cfg["dataset_name"].lower()
-    task     = data_cfg["task"]          # "classification" or "regression"
-    target   = data_cfg["target_column"]
+# ---------------------------------------------------------------------------
+# Core evaluation  ← importable from a notebook
+# ---------------------------------------------------------------------------
+
+def evaluate(cfg: dict, verbose: bool = True) -> dict:
+    """
+    Run the full TSTR evaluation described in the config and return results.
+
+    Parameters
+    ----------
+    cfg : dict
+        Parsed YAML config (same structure as the .yml files).
+    verbose : bool
+        Print a results table when True (default). Set to False for silent use
+        in notebooks where you only need the returned dict.
+
+    Returns
+    -------
+    dict with keys:
+        dataset  : str
+        task     : "classification" | "regression"
+        metric   : "accuracy" | "mse"
+        models   : {
+            "LR": {"mean": float, "std": float, "scores": list[float]},
+            "DT": {...},
+            "RF": {...},
+        }
+    """
+    dataset = cfg["dataset_name"].lower()
+    task    = cfg["data"]["task"]
+    target  = cfg["data"]["target_column"]
 
     assert dataset in HYPERPARAMS, (
         f"Unknown dataset '{dataset}'. Choose from: {list(HYPERPARAMS)}"
     )
 
-    scores    = {name: [] for name in ["LR", "DT", "RF"]}
-    metric_fn = accuracy_score if task == "classification" else mean_squared_error
+    metric_fn    = accuracy_score if task == "classification" else mean_squared_error
+    metric_label = "accuracy" if task == "classification" else "mse"
+    raw_scores   = {name: [] for name in ["LR", "DT", "RF"]}
+    syn_paths    = cfg["path_synthetic_trains"]
 
-    for i, syn_path in enumerate(cfg["path_synthetic_trains"], 1):
-        print(f"  [run {i}/{len(cfg['path_synthetic_trains'])}] {syn_path}")
+    for i, syn_path in enumerate(syn_paths, 1):
+        if verbose:
+            print(f"  [run {i}/{len(syn_paths)}] {syn_path}")
 
         # ── TSTR order ────────────────────────────────────────────────
-        # 1. Fit metadata (min/max, category maps) on synthetic data.
-        # 2. Apply that same metadata when encoding the test set so both
-        #    datasets share identical column ranges and bit widths.
+        # 1. Fit encoding metadata on synthetic training data.
+        # 2. Encode test set with that same metadata → identical bit widths.
         # ──────────────────────────────────────────────────────────────
-        X_synthetic, y_synthetic, syn_metadata = preprocess(
-            load(syn_path), cfg, target, metadata={}
-        )
-        X_test, y_test, _ = preprocess(
-            load(cfg["path_test"]), cfg, target, metadata=syn_metadata
-        )
+        X_syn, y_syn, syn_meta = preprocess(load(syn_path), cfg, target, metadata={})
+        X_test, y_test, _      = preprocess(load(cfg["path_test"]), cfg, target, metadata=syn_meta)
 
         if task == "classification":
-            le = LabelEncoder()
-            # Fit on the union of labels so both sets use the same encoding
-            all_labels = np.concatenate([y_synthetic.values, y_test.values])
-            le.fit(all_labels)
-            y_synthetic_enc = le.transform(y_synthetic.values)
-            y_test_enc      = le.transform(y_test.values)
+            le = LabelEncoder().fit(np.concatenate([y_syn.values, y_test.values]))
+            y_syn_enc  = le.transform(y_syn.values)
+            y_test_enc = le.transform(y_test.values)
+            scaler = None
         else:
-            scaler = MinMaxScaler()
-            y_synthetic_enc = scaler.fit_transform(
-                y_synthetic.values.reshape(-1, 1)
-            ).flatten()
-            # y_test stays in original scale; predictions are inverse-transformed
-            y_test_enc = y_test.values
+            scaler     = MinMaxScaler()
+            y_syn_enc  = scaler.fit_transform(y_syn.values.reshape(-1, 1)).flatten()
+            y_test_enc = y_test.values   # kept in original scale; preds are inverse-transformed
 
         for name, model in build_models(task, HYPERPARAMS[dataset]).items():
-            model.fit(X_synthetic, y_synthetic_enc)
+            model.fit(X_syn, y_syn_enc)
             y_pred = model.predict(X_test)
 
             if task == "regression":
-                y_pred = scaler.inverse_transform(
-                    y_pred.reshape(-1, 1)
-                ).flatten()
+                y_pred = scaler.inverse_transform(y_pred.reshape(-1, 1)).flatten()
 
-            scores[name].append(metric_fn(y_test_enc, y_pred))
+            raw_scores[name].append(float(metric_fn(y_test_enc, y_pred)))
 
-    # Results table
-    metric_label = "Accuracy" if task == "classification" else "MSE"
+    # Build structured result dict
+    results = {
+        "dataset": dataset,
+        "task":    task,
+        "metric":  metric_label,
+        "models": {
+            name: {
+                "mean":   float(np.mean(s)),
+                "std":    float(np.std(s)),
+                "scores": s,
+            }
+            for name, s in raw_scores.items()
+        },
+    }
+
+    if verbose:
+        _print_results(results)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Pretty printer (used by both evaluate() and the CLI)
+# ---------------------------------------------------------------------------
+
+def _print_results(results: dict) -> None:
+    dataset      = results["dataset"].upper()
+    task         = results["task"]
+    metric_label = results["metric"].upper()
+
     print(f"\n{'='*60}")
-    print(f"Dataset: {dataset.upper()} | Task: {task} | Metric: {metric_label}")
+    print(f"Dataset: {dataset} | Task: {task} | Metric: {metric_label}")
     print(f"{'='*60}")
     print(f"{'Model':<8}  {'Mean':>10}  {'Std':>10}  All scores")
     print(f"{'-'*60}")
-    for name, s in scores.items():
-        print(
-            f"{name:<8}  {np.mean(s):>10.4f}  {np.std(s):>10.4f}  "
-            f"[{'  '.join(f'{x:.4f}' for x in s)}]"
-        )
+    for name, info in results["models"].items():
+        scores_str = "  ".join(f"{x:.4f}" for x in info["scores"])
+        print(f"{name:<8}  {info['mean']:>10.4f}  {info['std']:>10.4f}  [{scores_str}]")
     print(f"{'='*60}\n")
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="TSTR evaluation for Binary Diffusion synthetic tabular data."
+    )
+    parser.add_argument("--config", required=True, help="Path to YAML config file.")
+    parser.add_argument("--quiet",  action="store_true", help="Suppress results table output.")
+    return parser.parse_args()
+
+
+def main():
+    args    = _parse_args()
+    cfg     = yaml.safe_load(open(args.config))
+    results = evaluate(cfg, verbose=not args.quiet)
+    return results
 
 
 if __name__ == "__main__":
