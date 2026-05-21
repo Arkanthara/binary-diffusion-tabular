@@ -153,9 +153,6 @@ def sample(
     if seed is not None:
         seed_everything(seed)
 
-    path_out = Path(out)
-    path_out.mkdir(parents=True, exist_ok=True)
-
     # ── Load checkpoint ───────────────────────────────────────────────
     ckpt_data = torch.load(ckpt)
 
@@ -240,10 +237,19 @@ def sample(
     # ── Save to disk ──────────────────────────────────────────────────
     df = pd.concat(dfs, ignore_index=True).iloc[:n_samples]
 
-    i = 1
-    while os.path.exists(path_out / f"samples_{i}.csv"):
-        i += 1
-    csv_path = path_out / f"samples_{i}.csv"
+    path_out = Path(out)
+
+    print(path_out)
+
+    if path_out.suffix == ".csv":
+        csv_path = path_out
+    else:
+        path_out.mkdir(parents=True, exist_ok=True)
+        i = 1
+        while os.path.exists(path_out / f"samples_{i}.csv"):
+            i += 1
+        csv_path = path_out / f"samples_{i}.csv"
+
     df.to_csv(csv_path, index=False)
 
     if verbose:
