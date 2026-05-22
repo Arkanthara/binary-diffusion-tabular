@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 
-SCHEDULE = Literal["linear", "quad", "sigmoid"]
+SCHEDULE = Literal["linear", "quad", "sigmoid", "const"]
 DENOISING_TARGET = Literal["mask", "target", "two_way"]
 SAMPLING_STRATEGY = Literal["mask", "target", "two_way"]
 
@@ -52,6 +52,8 @@ def make_beta_schedule(
     elif schedule == "sigmoid":
         betas = torch.linspace(-6, 6, n_timesteps)
         betas = torch.sigmoid(betas) * (end - start) + start
+    elif schedule == "const":
+        betas = torch.tensor([end] * n_timesteps)
     else:
         raise ValueError("Incorrect beta schedule type")
     return betas
@@ -237,7 +239,7 @@ class BinaryDiffusion1D(BaseDiffusion):
         model_fn: Optional[Callable] = None,
         y: Optional[torch.Tensor] = None,
         timesteps: Optional[int] = None,
-        threshold: Optional[float] = None,
+        threshold: float = 0.5,
         schedule: SCHEDULE = "linear",
         strategy: Optional[SAMPLING_STRATEGY] = None,
     ) -> torch.Tensor:
@@ -258,10 +260,7 @@ class BinaryDiffusion1D(BaseDiffusion):
         else:
             model_fn = partial(model_fn, model=self.model)
 
-        if threshold is not None:
-            thresholds = torch.tensor([threshold] * self.n_timesteps).to(self.device)
-        else:
-            thresholds = make_beta_schedule(schedule, self.n_timesteps, start=1 / self.size).to(self.device)
+        percentage = make_beta_schedule(schedule, self.n_timesteps, start=1 / self.size).to(self.device)
 
         x_t = torch.randint(0, 2, size=(n, self.size)).float().to(self.device)
         for t in reversed(timesteps):
@@ -275,19 +274,20 @@ class BinaryDiffusion1D(BaseDiffusion):
                 pred_mask = self.pred_postproc(pred_mask)
                 pred_target = self.pred_postproc(pred_target)
 
-                pred_mask = pred_mask > thresholds[t]
-                pred_target = pred_target > thresholds[t]
+                threshold_mask = torch.quantile(pred_mask, 1.0 - percentage[t])
+                pred_mask = pred_mask > threshold_mask
+                pred_target = pred_target > threshold
 
                 x_t = self._apply_sampling_strategy(
                     x_t, pred_target, pred_mask, t, strategy
                 )
             elif self.target == "target":
                 pred = self.pred_postproc(pred)
-                pred = pred > thresholds[t]
+                pred = pred > threshold
                 x_t = pred.float()
             else:
                 pred = self.pred_postproc(pred)
-                pred = pred > thresholds[t]
+                pred = pred > threshold
                 x_t = self.p_sample(x_t, pred)
 
             if t != 0:
