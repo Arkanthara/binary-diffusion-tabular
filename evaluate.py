@@ -102,6 +102,9 @@ def preprocess(df: pd.DataFrame, cfg: dict, target: str, metadata: dict):
     X = df.drop(columns=[target]).copy()
     y = df[target]
 
+    col_categorical = [c for c in col_categorical if c in X.columns]
+    col_numerical   = [c for c in col_numerical   if c in X.columns]
+
     # --- numerical → 32-bit binary string --------------------------------
     def numerical_to_binary(val: float, min_val: float, max_val: float) -> str:
         size = 32

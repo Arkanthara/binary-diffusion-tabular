@@ -237,7 +237,8 @@ class BinaryDiffusion1D(BaseDiffusion):
         model_fn: Optional[Callable] = None,
         y: Optional[torch.Tensor] = None,
         timesteps: Optional[int] = None,
-        threshold: float = 0.5,
+        threshold: Optional[float] = None,
+        schedule: SCHEDULE = "linear",
         strategy: Optional[SAMPLING_STRATEGY] = None,
     ) -> torch.Tensor:
         if self.target == "two_way" and strategy is None:
@@ -257,6 +258,11 @@ class BinaryDiffusion1D(BaseDiffusion):
         else:
             model_fn = partial(model_fn, model=self.model)
 
+        if threshold is not None:
+            thresholds = torch.tensor([threshold] * self.n_timesteps).to(self.device)
+        else:
+            thresholds = make_beta_schedule(schedule, self.n_timesteps, start=1 / self.size).to(self.device)
+
         x_t = torch.randint(0, 2, size=(n, self.size)).float().to(self.device)
         for t in reversed(timesteps):
             ts = torch.tensor([t] * n).to(self.device)
@@ -269,19 +275,19 @@ class BinaryDiffusion1D(BaseDiffusion):
                 pred_mask = self.pred_postproc(pred_mask)
                 pred_target = self.pred_postproc(pred_target)
 
-                pred_mask = pred_mask > threshold
-                pred_target = pred_target > threshold
+                pred_mask = pred_mask > thresholds[t]
+                pred_target = pred_target > thresholds[t]
 
                 x_t = self._apply_sampling_strategy(
                     x_t, pred_target, pred_mask, t, strategy
                 )
             elif self.target == "target":
                 pred = self.pred_postproc(pred)
-                pred = pred > threshold
+                pred = pred > thresholds[t]
                 x_t = pred.float()
             else:
                 pred = self.pred_postproc(pred)
-                pred = pred > threshold
+                pred = pred > thresholds[t]
                 x_t = self.p_sample(x_t, pred)
 
             if t != 0:
@@ -299,7 +305,8 @@ class BinaryDiffusion1D(BaseDiffusion):
         y: Optional[torch.Tensor] = None,
         n: int,
         timesteps: Optional[int] = None,
-        threshold: float = 0.5,
+        threshold: Optional[float] = None,
+        schedule: SCHEDULE = "linear",
         strategy: SAMPLING_STRATEGY = "target",
     ) -> torch.Tensor:
         """Samples data
@@ -322,6 +329,7 @@ class BinaryDiffusion1D(BaseDiffusion):
             y=y,
             timesteps=timesteps,
             threshold=threshold,
+            schedule=schedule,
             strategy=strategy,
         )
         return x

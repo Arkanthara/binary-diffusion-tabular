@@ -40,6 +40,7 @@ from binary_diffusion_tabular import (
     TASK,
     get_random_labels,
     seed_everything,
+    SCHEDULE,
 )
 
 
@@ -96,7 +97,8 @@ def sample(
     out: str,
     n_samples: int,
     batch_size: int,
-    threshold: float = 0.5,
+    threshold: Optional[float] = None,
+    schedule: SCHEDULE = "linear",
     strategy: str = "target",
     seed: Optional[int] = None,
     guidance_scale: float = 0.0,
@@ -126,6 +128,8 @@ def sample(
         Number of samples per forward pass.
     threshold : float
         Binarisation threshold (default 0.5).
+    schedule : SCHEDULE
+        Beta schedule for sampling (default "linear").
     strategy : str
         Sampling strategy — "target" or "mask" (default "target").
     seed : int, optional
@@ -214,6 +218,7 @@ def sample(
             y=labels,
             timesteps=timesteps_sampling,
             threshold=threshold,
+            schedule=schedule,
             strategy=strategy,
         )
 
@@ -273,6 +278,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--n_samples",   "-n",   type=int,   required=True,               help="Number of samples to generate")
     parser.add_argument("--batch_size",  "-b",   type=int,   required=True,               help="Batch size for sampling")
     parser.add_argument("--threshold",           type=float, default=0.5,                 help="Threshold for binarisation")
+    parser.add_argument("--schedule",            type=str,   default="linear",            help="Beta schedule for sampling", choices=["linear", "cosine"])
     parser.add_argument("--strategy",            type=str,   default="target",            help="Sampling strategy",        choices=["target", "mask"])
     parser.add_argument("--seed",        "-s",   type=int,   default=None,                help="Random seed")
     parser.add_argument("--guidance_scale", "-g",type=float, default=0.0,                 help="Guidance scale")
@@ -294,6 +300,7 @@ def main():
         n_samples=args.n_samples,
         batch_size=args.batch_size,
         threshold=args.threshold,
+        schedule=args.schedule,
         strategy=args.strategy,
         seed=args.seed,
         guidance_scale=args.guidance_scale,
