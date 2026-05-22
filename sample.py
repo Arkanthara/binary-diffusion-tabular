@@ -97,7 +97,7 @@ def sample(
     out: str,
     n_samples: int,
     batch_size: int,
-    threshold: Optional[float] = None,
+    threshold: float = 0.5,
     schedule: SCHEDULE = "linear",
     strategy: str = "target",
     seed: Optional[int] = None,
@@ -278,7 +278,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--n_samples",   "-n",   type=int,   required=True,               help="Number of samples to generate")
     parser.add_argument("--batch_size",  "-b",   type=int,   required=True,               help="Batch size for sampling")
     parser.add_argument("--threshold",           type=float, default=0.5,                 help="Threshold for binarisation")
-    parser.add_argument("--schedule",            type=str,   default="linear",            help="Beta schedule for sampling", choices=["linear", "cosine"])
+    parser.add_argument("--schedule",            type=str,   default="linear",            help="Beta schedule for sampling", choices=["linear", "quad", "sigmoid", "const"])
     parser.add_argument("--strategy",            type=str,   default="target",            help="Sampling strategy",        choices=["target", "mask"])
     parser.add_argument("--seed",        "-s",   type=int,   default=None,                help="Random seed")
     parser.add_argument("--guidance_scale", "-g",type=float, default=0.0,                 help="Guidance scale")
