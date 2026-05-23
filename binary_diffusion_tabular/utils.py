@@ -93,6 +93,10 @@ def save_config(config: Dict, yaml_file_path: PathOrStr) -> None:
 
 
 def select_equally_distributed_numbers(N: int, K: int) -> np.ndarray:
+    if K >= N:
+        return np.arange(0, N)     # can't have more steps than trained timesteps
+    if K == 1:
+        return np.array([N - 1])
     if N % K == 0:
         return np.arange(0, N, N // K)
 

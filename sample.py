@@ -55,6 +55,7 @@ def cfg_model_fn(
     model: nn.Module,
     guidance_scale: float,
     task: TASK,
+    correction: bool = False,
     *args,
     **kwargs,
 ) -> torch.Tensor:
@@ -83,7 +84,10 @@ def cfg_model_fn(
     combine_y  = torch.cat([y, y_other], dim=0)
     model_out  = model(combine, combine_ts, y=combine_y)
     cond_eps, uncond_eps = torch.split(model_out, [y.shape[0], y.shape[0]], dim=0)
-    return uncond_eps + guidance_scale * (cond_eps - uncond_eps)
+    if correction:
+        return (1 + guidance_scale) * cond_eps - guidance_scale * uncond_eps
+    else:
+        return uncond_eps + guidance_scale * (cond_eps - uncond_eps)
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +109,9 @@ def sample(
     target_column_name: Optional[str] = None,
     device: str = "cuda",
     use_ema: bool = False,
-    dropna: bool = False,
+    dropna: bool = True,
     verbose: bool = True,
+    correction: bool = False,
 ) -> pd.DataFrame:
     """
     Generate synthetic tabular samples from a trained Binary Diffusion model
@@ -144,7 +149,7 @@ def sample(
     use_ema : bool
         Load the EMA weights instead of the raw model weights (default False).
     dropna : bool
-        Drop rows that contain NaN after inverse transformation (default False).
+        Drop rows that contain NaN after inverse transformation (default True).
     verbose : bool
         Show a tqdm progress bar (default True).
 
@@ -210,7 +215,7 @@ def sample(
 
         x = diffusion.sample(
             model_fn=(
-                partial(cfg_model_fn, guidance_scale=guidance_scale, task=task)
+                partial(cfg_model_fn, guidance_scale=guidance_scale, task=task, correction=correction)
                 if classifier_free_guidance and guidance_scale > 0
                 else None
             ),

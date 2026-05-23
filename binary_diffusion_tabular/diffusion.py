@@ -249,9 +249,6 @@ class BinaryDiffusion1D(BaseDiffusion):
         if strategy not in ["target", "mask", "half-half"]:
             raise ValueError("Incorrect strategy type")
 
-        if strategy is not None and self.target != "two_way":
-            raise ValueError("Strategy can only be used with two_way target")
-
         if timesteps is None:
             timesteps = list(range(self.n_timesteps))
 
@@ -263,37 +260,56 @@ class BinaryDiffusion1D(BaseDiffusion):
         percentage = make_beta_schedule(schedule, self.n_timesteps, start=1 / self.size).to(self.device)
 
         x_t = torch.randint(0, 2, size=(n, self.size)).float().to(self.device)
-        for t in reversed(timesteps):
-            ts = torch.tensor([t] * n).to(self.device)
+
+        # Build the reversed list once so we can look ahead
+        reversed_timesteps = list(reversed(timesteps))
+
+        for i, t in enumerate(reversed_timesteps):
+            ts    = torch.tensor([t] * n).to(self.device)
+            # Next timestep in the reversed sequence (None at the last step)
+            t_next = reversed_timesteps[i + 1] if i + 1 < len(reversed_timesteps) else None
 
             pred = model_fn(x_t, ts, y=y)
 
             if self.target == "two_way":
                 pred_target, pred_mask = pred.chunk(2, dim=1)
 
-                pred_mask = self.pred_postproc(pred_mask)
+                pred_mask   = self.pred_postproc(pred_mask)
                 pred_target = self.pred_postproc(pred_target)
 
-                threshold_mask = torch.quantile(pred_mask, 1.0 - percentage[t])
-                pred_mask = pred_mask > threshold_mask
+                if schedule == "const":
+                    threshold_mask = threshold
+                else:
+                    threshold_mask = torch.quantile(pred_mask, 1.0 - percentage[t], dim=1, keepdim=True)
+
+                pred_mask   = pred_mask   > threshold_mask
                 pred_target = pred_target > threshold
 
                 x_t = self._apply_sampling_strategy(
                     x_t, pred_target, pred_mask, t, strategy
                 )
+
             elif self.target == "target":
                 pred = self.pred_postproc(pred)
                 pred = pred > threshold
-                x_t = pred.float()
-            else:
-                pred = self.pred_postproc(pred)
-                pred = pred > threshold
-                x_t = self.p_sample(x_t, pred)
+                x_t  = pred.float()
 
-            if t != 0:
-                beta = torch.tensor([self.betas[t]] * n).to(self.device)
+            else:  # mask
+                pred = self.pred_postproc(pred)
+                if schedule == "const":
+                    threshold_mask = threshold
+                else:
+                    threshold_mask = torch.quantile(pred, 1.0 - percentage[t], dim=1, keepdim=True)
+                pred = pred > threshold_mask
+                x_t  = self.p_sample(x_t, pred)
+
+            # ✅ Re-noise at t_next level, not t level
+            # This ensures the next denoising step sees the corruption
+            # level it was trained on
+            if t_next is not None:
+                beta = torch.tensor([self.betas[t_next]] * n).to(self.device)
                 mask = get_mask_torch(beta, x_t.shape[1:], self.device)
-                x_t = self.q_sample(x_t, t, mask)
+                x_t  = self.q_sample(x_t, t_next, mask)
 
         return x_t
 
