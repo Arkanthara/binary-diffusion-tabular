@@ -242,6 +242,8 @@ class BinaryDiffusion1D(BaseDiffusion):
         threshold: float = 0.5,
         schedule: SCHEDULE = "linear",
         strategy: Optional[SAMPLING_STRATEGY] = None,
+        renoise_factor: float = 1.0,
+        use_t_next: bool = True,
     ) -> torch.Tensor:
         if self.target == "two_way" and strategy is None:
             strategy = "target"
@@ -257,7 +259,7 @@ class BinaryDiffusion1D(BaseDiffusion):
         else:
             model_fn = partial(model_fn, model=self.model)
 
-        percentage = make_beta_schedule(schedule, self.n_timesteps, start=1 / self.size).to(self.device)
+        percentage = self.betas
 
         x_t = torch.randint(0, 2, size=(n, self.size)).float().to(self.device)
 
@@ -268,6 +270,7 @@ class BinaryDiffusion1D(BaseDiffusion):
             ts    = torch.tensor([t] * n).to(self.device)
             # Next timestep in the reversed sequence (None at the last step)
             t_next = reversed_timesteps[i + 1] if i + 1 < len(reversed_timesteps) else None
+
 
             pred = model_fn(x_t, ts, y=y)
 
@@ -285,9 +288,9 @@ class BinaryDiffusion1D(BaseDiffusion):
                 pred_mask   = pred_mask   > threshold_mask
                 pred_target = pred_target > threshold
 
-                x_t = self._apply_sampling_strategy(
-                    x_t, pred_target, pred_mask, t, strategy
-                )
+                # print(f"Step {t}: Ones in mask: {pred_mask.float().mean().item() * 100:.4f}%, Ones required: {percentage[t] * 100:.4f}%")
+
+                x_t = self._apply_sampling_strategy(x_t, pred_target, pred_mask, t, strategy)
 
             elif self.target == "target":
                 pred = self.pred_postproc(pred)
@@ -306,10 +309,16 @@ class BinaryDiffusion1D(BaseDiffusion):
             # ✅ Re-noise at t_next level, not t level
             # This ensures the next denoising step sees the corruption
             # level it was trained on
-            if t_next is not None:
-                beta = torch.tensor([self.betas[t_next]] * n).to(self.device)
+            if t_next is not None and use_t_next:
+                beta = torch.tensor([self.betas[t_next] * renoise_factor] * n).to(self.device)
                 mask = get_mask_torch(beta, x_t.shape[1:], self.device)
                 x_t  = self.q_sample(x_t, t_next, mask)
+
+            # Keep original for comparison
+            if t != 0 and not use_t_next:
+                beta = torch.tensor([self.betas[t]] * n).to(self.device)
+                mask = get_mask_torch(beta, x_t.shape[1:], self.device)
+                x_t = self.q_sample(x_t, t, mask)
 
         return x_t
 
@@ -324,6 +333,8 @@ class BinaryDiffusion1D(BaseDiffusion):
         threshold: Optional[float] = None,
         schedule: SCHEDULE = "linear",
         strategy: SAMPLING_STRATEGY = "target",
+        renoise_factor: float = 1.0,
+        use_t_next: bool = True,
     ) -> torch.Tensor:
         """Samples data
 
@@ -334,6 +345,8 @@ class BinaryDiffusion1D(BaseDiffusion):
             timesteps: number of timesteps to use during sampling
             threshold: threshold to use for sampling
             strategy: sampling strategy to use. Choices: target, mask, half-half
+            renoise_factor: factor to scale the re-noising
+            use_t_next: whether to use the next timestep for re-noising
 
         Returns:
             torch.Tensor: sampled data
@@ -347,6 +360,8 @@ class BinaryDiffusion1D(BaseDiffusion):
             threshold=threshold,
             schedule=schedule,
             strategy=strategy,
+            renoise_factor=renoise_factor,
+            use_t_next=use_t_next,
         )
         return x
 

@@ -30,7 +30,7 @@ model:                                       # denoiser model parameters
 diffusion:                                   # diffusion parameters
   schedule: quad                             # noise schedule, can be `linear`, `quad`, `sigmoid`
   n_timesteps: 1000                          # number of denoising steps in denoiser pretraining
-  target: two_way                            # denoiser prediction target: `mask`, `target`, `two_way`
+  target: target                            # denoiser prediction target: `mask`, `target`, `two_way`
 
 trainer:                                     # trainer parameters
   train_num_steps: 500000                    # number of training steps

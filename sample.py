@@ -55,7 +55,6 @@ def cfg_model_fn(
     model: nn.Module,
     guidance_scale: float,
     task: TASK,
-    correction: bool = False,
     *args,
     **kwargs,
 ) -> torch.Tensor:
@@ -84,10 +83,7 @@ def cfg_model_fn(
     combine_y  = torch.cat([y, y_other], dim=0)
     model_out  = model(combine, combine_ts, y=combine_y)
     cond_eps, uncond_eps = torch.split(model_out, [y.shape[0], y.shape[0]], dim=0)
-    if correction:
-        return (1 + guidance_scale) * cond_eps - guidance_scale * uncond_eps
-    else:
-        return uncond_eps + guidance_scale * (cond_eps - uncond_eps)
+    return (1 + guidance_scale) * cond_eps - guidance_scale * uncond_eps
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +107,8 @@ def sample(
     use_ema: bool = False,
     dropna: bool = True,
     verbose: bool = True,
-    correction: bool = False,
+    renoise_factor: float = 1.0,
+    use_t_next: bool = True,
 ) -> pd.DataFrame:
     """
     Generate synthetic tabular samples from a trained Binary Diffusion model
@@ -215,7 +212,7 @@ def sample(
 
         x = diffusion.sample(
             model_fn=(
-                partial(cfg_model_fn, guidance_scale=guidance_scale, task=task, correction=correction)
+                partial(cfg_model_fn, guidance_scale=guidance_scale, task=task)
                 if classifier_free_guidance and guidance_scale > 0
                 else None
             ),
@@ -225,6 +222,8 @@ def sample(
             threshold=threshold,
             schedule=schedule,
             strategy=strategy,
+            renoise_factor=renoise_factor,
+            use_t_next=use_t_next,
         )
 
         if conditional:
